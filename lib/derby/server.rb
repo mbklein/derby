@@ -1,13 +1,17 @@
 require 'derby'
+require 'derby/post_processor'
+require 'derby/fedora_adapter'
 require 'sinatra/base'
 require 'rack/ldp'
 
 module Derby 
   class Server < Sinatra::Base
+    use Derby::PostProcessor
     use Rack::LDP::ContentNegotiation
     use Rack::LDP::Errors
     use Rack::LDP::Responses
     use Rack::ConditionalGet
+    use Derby::FedoraAdapter
     use Rack::LDP::Requests
 
     configure { set :repository, RDF::Repository.new }

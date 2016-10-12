@@ -24,9 +24,13 @@ describe Derby::Server do
         header 'Content-type', 'application/n-triples'
         post '/', rdf
         expect(last_response.status).to eq 201
-        expect(last_response.body).to include rdf
+        expect(last_response.body).to eq last_response['Location']
+        resource_path = URI.parse(last_response['Location']).path
         expect(last_response['Link'])
           .to include RDF::LDP::RDFSource.to_uri
+          
+        get resource_path
+        expect(last_response.body).to include rdf
       end
 
       it 'creates a non-RDF source' do
@@ -35,9 +39,13 @@ describe Derby::Server do
         header 'Link', '<http://www.w3.org/ns/ldp#NonRDFSource>; rel="type"'
         post '/', content
         expect(last_response.status).to eq 201
-        expect(last_response.body).to include content
+        expect(last_response.body).to eq last_response['Location']
+        resource_path = URI.parse(last_response['Location']).path
         expect(last_response['Link'])
           .to include RDF::LDP::NonRDFSource.to_uri
+
+        get resource_path
+        expect(last_response.body).to include content
       end
     end
   end
