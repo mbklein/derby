@@ -13,8 +13,13 @@ module Derby
 
       ##
       # Utility functions to aid in statement building and querying
-      def subject ; response.graph.name   ; end      
-      def graph   ; response.graph        ; end
+      def graph
+        case response
+        when RDF::LDP::RDFSource then response.graph
+        when RDF::LDP::NonRDFSource then response.description.graph
+        end
+      end
+      def subject ; response.subject_uri  ; end      
       def fcrepo4 ; ::RDF::Vocab::Fcrepo4 ; end      
       def ldp     ; ::RDF::Vocab::LDP     ; end  
 
@@ -31,11 +36,13 @@ module Derby
       # Set the objects for the given predicates, deleting existing statements if necessary
       def replace(pairs)
         changes = RDF::Changeset.new do |c|
-          pairs.each_pair do |predicate, object|
-            RDF::Query::Pattern.new(subject, predicate, :value).execute(graph).each do |statement|
-              c.delete statement
+          pairs.each_pair do |predicate, objects|
+            Array(objects).each do |object|
+              RDF::Query::Pattern.new(subject, predicate, :value).execute(graph).each do |statement|
+                c.delete statement
+              end
+              c.insert [subject, predicate, object]
             end
-            c.insert [subject, predicate, object]
           end
         end
         changes.apply(graph)
@@ -62,10 +69,45 @@ module Derby
       end
 
       ##
-      # Add ldp:BasicContainer, fedora:Container, and fedora:Resource
-      def container!
+      # Add appropriate RDF types
+      def types!
         env['HTTP_LINK'] ||= %{<http://www.w3.org/ns/ldp#Container>;rel="type"}
-        ensure_all(RDF.type => ldp.BasicContainer, RDF.type => fcrepo4.Container, RDF.type => fcrepo4.Resource)
+        required_types = [fcrepo4.Resource]
+        case response
+        when RDF::LDP::RDFSource then required_types << ldp.BasicContainer << fcrepo4.Container
+        when RDF::LDP::NonRDFSource then required_types << fcrepo4.Binary
+        end
+        replace RDF.type => required_types
+      end
+
+      ##
+      # Check content-disposition header for original filename
+      def filename!
+        if env['HTTP_CONTENT_DISPOSITION']
+          filename = env['HTTP_CONTENT_DISPOSITION'].scan(/filename\s*=\s*"(.+)"\s*$/).flatten.first
+          replace ::RDF::Vocab::EBUCore.filename => filename
+        end
+      end
+      
+      ##
+      # Set MIME type for non-RDF resource
+      def mime_type!
+        replace ::RDF::Vocab::EBUCore.hasMimeType => env['CONTENT_TYPE']
+      end
+      
+      ##
+      # Save dize of non-RDF resource
+      def size!
+        replace ::RDF::Vocab::PREMIS.hasSize => response.storage.io.size
+      end
+      
+      ##
+      # Save SHA1 digest for non-RDF resource
+      def digest!
+        digest = Digest::SHA1.new
+        digest.update(response.storage.io.read)
+        response.storage.io.rewind
+        replace ::RDF::Vocab::PREMIS.hasMessageDigest => "urn:sha1:#{digest.hexdigest}"
       end
 
       ##
@@ -104,13 +146,21 @@ module Derby
       # Perform all updates
       def update!
         if ['POST','PUT','PATCH'].include?(env['REQUEST_METHOD']) or env['PATH_INFO'] == '/'
-          if response.is_a?(RDF::LDP::RDFSource) and status.between?(200,299)
-            container!
-            repository_root! 
+          if status.between?(200,299)
             writable!
             created!
             modified!
+            types!
+            case response
+            when RDF::LDP::RDFSource
+              repository_root! 
+            when RDF::LDP::NonRDFSource
+              filename!
+              mime_type!
+              digest!
+            end
           end
+          
           return_204_on_patch
           return_resource_uri_on_create
         end
